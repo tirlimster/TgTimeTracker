@@ -65,20 +65,20 @@ def format_clock(ts: int) -> str:
 
 def start_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(text="Start tracking", callback_data=StartTracking().pack())
-        ]]
+        inline_keyboard=[[InlineKeyboardButton(text="Start tracking", callback_data=StartTracking().pack())]]
     )
 
 
 def stop_keyboard(user_id: int, start_ts: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(
-                text="Stop",
-                callback_data=StopTracking(user_id=user_id, start_ts=start_ts).pack(),
-            )
-        ]]
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Stop",
+                    callback_data=StopTracking(user_id=user_id, start_ts=start_ts).pack(),
+                )
+            ]
+        ]
     )
 
 
@@ -136,10 +136,11 @@ async def on_stop_tracking(callback: CallbackQuery, callback_data: StopTracking)
     elapsed = end_ts - callback_data.start_ts
     name = callback.from_user.full_name
 
-    log_text = (
-        f"User {name} started at {format_clock(callback_data.start_ts)}, "
-        f"ended at {format_clock(end_ts)} and spent {format_elapsed(elapsed)}"
-    )
+    start_formatted = format_clock(callback_data.start_ts)
+    end_formatted = format_clock(end_ts)
+    elapsed_formatted = format_elapsed(elapsed)
+    log_text = f"{name}: {start_formatted} - {end_formatted} ({elapsed_formatted})"
+
     await callback.message.edit_text(log_text)
     await callback.answer()
 
@@ -149,6 +150,7 @@ async def on_stop_tracking(callback: CallbackQuery, callback_data: StopTracking)
 async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed: int) -> None:
     state = chat_states.get(chat_id)
     if state is None:
+        logging.warning(f"No state for chat {chat_id}")
         return
 
     _, prev_seconds = state.members.get(user_id, (name, 0))
