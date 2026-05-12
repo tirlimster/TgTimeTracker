@@ -1,9 +1,7 @@
 import asyncio
-import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +15,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, TypeAdapter
 
 dp = Dispatcher()
 
@@ -29,52 +28,33 @@ TRACKING_TITLE = "Time tracked"
 STATE_FILE = Path("data/chat_states.json")
 
 
-@dataclass
-class MemberState:
+class MemberState(BaseModel):
     name: str
     total_seconds: int
 
 
-@dataclass
-class ChatState:
+class ChatState(BaseModel):
     message_id: int | None = None
-    members: dict[int, MemberState] = field(default_factory=dict)
+    members: dict[int, MemberState] = Field(default_factory=dict)
 
 
 chat_states: dict[int, ChatState] = {}
 active_sessions: dict[int, set[int]] = {}
 
+_states_adapter: TypeAdapter[dict[int, ChatState]] = TypeAdapter(dict[int, ChatState])
+
 
 def save_states() -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        str(chat_id): {
-            "message_id": state.message_id,
-            "members": {
-                str(user_id): {"name": member.name, "total_seconds": member.total_seconds}
-                for user_id, member in state.members.items()
-            },
-        }
-        for chat_id, state in chat_states.items()
-    }
     tmp = STATE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+    tmp.write_bytes(_states_adapter.dump_json(chat_states, indent=2))
     tmp.replace(STATE_FILE)
 
 
 def load_states() -> None:
     if not STATE_FILE.exists():
         return
-    raw = json.loads(STATE_FILE.read_text())
-    for chat_id_str, data in raw.items():
-        members: dict[int, MemberState] = {
-            int(uid): MemberState(name=entry["name"], total_seconds=entry["total_seconds"])
-            for uid, entry in data["members"].items()
-        }
-        chat_states[int(chat_id_str)] = ChatState(
-            message_id=data["message_id"],
-            members=members,
-        )
+    chat_states.update(_states_adapter.validate_json(STATE_FILE.read_bytes()))
 
 
 class StartTracking(CallbackData, prefix="tstart"):
