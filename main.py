@@ -114,10 +114,7 @@ def working_text(name: str, start_ts: int) -> str:
 
 
 def log_text(name: str, start_ts: int, end_ts: int) -> str:
-    return (
-        f"{name}: {format_clock(start_ts)} - {format_clock(end_ts)} "
-        f"({format_elapsed(end_ts - start_ts)})"
-    )
+    return f"{name}: {format_clock(start_ts)} - {format_clock(end_ts)} ({format_elapsed(end_ts - start_ts)})"
 
 
 def stepper_text(name: str, start_ts: int, end_ts: int, target: str) -> str:
@@ -148,15 +145,14 @@ def edit_menu_kb(user_id: int, start_ts: int, end_ts: int) -> InlineKeyboardMark
     def btn(label: str, action: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(
             text=label,
-            callback_data=MenuAction(
-                action=action, user_id=user_id, start_ts=start_ts, end_ts=end_ts
-            ).pack(),
+            callback_data=MenuAction(action=action, user_id=user_id, start_ts=start_ts, end_ts=end_ts).pack(),
         )
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [btn("Edit start", "es"), btn("Edit end", "ee")],
-            [btn("Submit", "su"), btn("Cancel", "ca")],
+            [btn("✅ Submit", "su")],
+            [btn("❌ Cancel", "ca")],
         ]
     )
 
@@ -176,7 +172,7 @@ def stepper_kb(target: str, user_id: int, start_ts: int, end_ts: int) -> InlineK
             [step("+1h", 3600), step("+10m", 600), step("+1m", 60)],
             [
                 InlineKeyboardButton(
-                    text="Submit",
+                    text="✅ Submit",
                     callback_data=StepperSubmit(
                         target=target, user_id=user_id, start_ts=start_ts, end_ts=end_ts
                     ).pack(),
@@ -221,9 +217,7 @@ async def on_start_tracking(callback: CallbackQuery) -> None:
     user = callback.from_user
     chat_id = callback.message.chat.id
     if user.id in active_sessions.get(chat_id, set()):
-        await callback.answer(
-            "You already have an ongoing tracking. End it first.", show_alert=True
-        )
+        await callback.answer("You already have an ongoing tracking. End it first.", show_alert=True)
         return
     start_ts = int(time.time())
     active_sessions.setdefault(chat_id, set()).add(user.id)
@@ -307,10 +301,7 @@ async def on_step(callback: CallbackQuery, callback_data: StepAction) -> None:
         last_end = member.last_end_ts if member else None
         if last_end is not None and new_s < last_end:
             new_s = last_end
-            clamp_msg = (
-                f"Can't go earlier than your previous session ended "
-                f"({format_clock(last_end)})."
-            )
+            clamp_msg = f"Can't go earlier than your previous session ended ({format_clock(last_end)})."
         if new_s >= e or new_s > now:
             await callback.answer("Out of bounds.", show_alert=True)
             return
@@ -349,9 +340,7 @@ async def on_stepper_submit(callback: CallbackQuery, callback_data: StepperSubmi
     await callback.answer()
 
 
-async def update_total(
-    bot: Bot, chat_id: int, user_id: int, name: str, start_ts: int, end_ts: int
-) -> None:
+async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, start_ts: int, end_ts: int) -> None:
     state = chat_states.get(chat_id)
     if state is None:
         state = ChatState()
@@ -369,9 +358,7 @@ async def update_total(
     new_seconds = prev_seconds + (end_ts - start_ts)
     new_formatted = format_total(new_seconds)
 
-    state.members[user_id] = MemberState(
-        name=name, total_seconds=new_seconds, last_end_ts=end_ts
-    )
+    state.members[user_id] = MemberState(name=name, total_seconds=new_seconds, last_end_ts=end_ts)
     save_states()
 
     if state.message_id is None:
