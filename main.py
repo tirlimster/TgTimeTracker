@@ -55,7 +55,11 @@ def save_states() -> None:
 def load_states() -> None:
     if not STATE_FILE.exists():
         return
-    chat_states.update(_states_adapter.validate_json(STATE_FILE.read_bytes()))
+    try:
+        data = _states_adapter.validate_json(STATE_FILE.read_bytes())
+        chat_states.update(data)
+    except Exception as e:
+        logging.error(f"Failed to load state file: {e}")
 
 
 class StartTracking(CallbackData, prefix="tstart"):
@@ -302,14 +306,26 @@ async def on_step(callback: CallbackQuery, callback_data: StepAction) -> None:
         if last_end is not None and new_s < last_end:
             new_s = last_end
             clamp_msg = f"Can't go earlier than your previous session ended ({format_clock(last_end)})."
-        if new_s >= e or new_s > now:
-            await callback.answer("Out of bounds.", show_alert=True)
+        if new_s >= e:
+            await callback.answer(
+                f"Start can't be at or after the end ({format_clock(e)}).",
+                show_alert=True,
+            )
             return
         s = new_s
     else:
         new_e = e + callback_data.delta
-        if new_e <= s or new_e > now:
-            await callback.answer("Out of bounds.", show_alert=True)
+        if new_e <= s:
+            await callback.answer(
+                f"End can't be at or before the start ({format_clock(s)}).",
+                show_alert=True,
+            )
+            return
+        if new_e > now:
+            await callback.answer(
+                f"End can't be in the future (now is {format_clock(now)}).",
+                show_alert=True,
+            )
             return
         e = new_e
 
