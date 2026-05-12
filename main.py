@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from dataclasses import dataclass, field
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -13,6 +14,30 @@ dp = Dispatcher()
 GROUP_CHAT_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
 PRESENT_STATUSES = {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}
 ABSENT_STATUSES = {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
+
+TRACKING_TITLE = "Time tracked"
+
+
+@dataclass
+class ChatState:
+    message_id: int | None = None
+    members: dict[int, tuple[str, int]] = field(default_factory=dict)
+
+
+chat_states: dict[int, ChatState] = {}
+
+
+def format_duration(seconds: int) -> str:
+    hours, remainder = divmod(seconds, 3600)
+    minutes = remainder // 60
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def render_tracking_message(state: ChatState) -> str:
+    lines = [f"{TRACKING_TITLE}:"]
+    for name, seconds in state.members.values():
+        lines.append(f"{name}: {format_duration(seconds)}")
+    return "\n".join(lines)
 
 
 @dp.message(CommandStart())
@@ -28,10 +53,14 @@ async def handle_added_to_group(event: ChatMemberUpdated) -> None:
         return
     if event.new_chat_member.status not in PRESENT_STATUSES:
         return
-    await event.bot.send_message(
-        event.chat.id,
-        f"Hello, {event.chat.title}! Thanks for adding me — I'm ready to track time.",
-    )
+
+    state = ChatState()
+    if event.from_user and not event.from_user.is_bot:
+        state.members[event.from_user.id] = (event.from_user.full_name, 0)
+
+    sent = await event.bot.send_message(event.chat.id, render_tracking_message(state))
+    state.message_id = sent.message_id
+    chat_states[event.chat.id] = state
 
 
 async def main() -> None:
