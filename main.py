@@ -31,6 +31,7 @@ STATE_FILE = Path("data/chat_states.json")
 class MemberState(BaseModel):
     name: str
     total_seconds: int
+    last_end_ts: int | None = None
 
 
 class ChatState(BaseModel):
@@ -277,7 +278,7 @@ async def on_menu_action(callback: CallbackQuery, callback_data: MenuAction) -> 
         )
     elif callback_data.action == "su":
         await callback.message.edit_text(log_text(name, s, e))
-        await update_total(callback.bot, chat_id, uid, name, e - s)
+        await update_total(callback.bot, chat_id, uid, name, s, e)
         active_sessions.get(chat_id, set()).discard(uid)
     elif callback_data.action == "ca":
         await callback.bot.delete_message(chat_id=chat_id, message_id=msg_id)
@@ -297,9 +298,19 @@ async def on_step(callback: CallbackQuery, callback_data: StepAction) -> None:
     s, e = callback_data.start_ts, callback_data.end_ts
     now = int(time.time())
     target = callback_data.target
+    clamp_msg: str | None = None
 
     if target == "s":
         new_s = s + callback_data.delta
+        chat_state = chat_states.get(callback.message.chat.id)
+        member = chat_state.members.get(callback.from_user.id) if chat_state else None
+        last_end = member.last_end_ts if member else None
+        if last_end is not None and new_s < last_end:
+            new_s = last_end
+            clamp_msg = (
+                f"Can't go earlier than your previous session ended "
+                f"({format_clock(last_end)})."
+            )
         if new_s >= e or new_s > now:
             await callback.answer("Out of bounds.", show_alert=True)
             return
@@ -315,7 +326,10 @@ async def on_step(callback: CallbackQuery, callback_data: StepAction) -> None:
         stepper_text(callback.from_user.full_name, s, e, target),
         reply_markup=stepper_kb(target, callback.from_user.id, s, e),
     )
-    await callback.answer()
+    if clamp_msg:
+        await callback.answer(clamp_msg, show_alert=True)
+    else:
+        await callback.answer()
 
 
 @dp.callback_query(StepperSubmit.filter())
@@ -335,7 +349,9 @@ async def on_stepper_submit(callback: CallbackQuery, callback_data: StepperSubmi
     await callback.answer()
 
 
-async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed: int) -> None:
+async def update_total(
+    bot: Bot, chat_id: int, user_id: int, name: str, start_ts: int, end_ts: int
+) -> None:
     state = chat_states.get(chat_id)
     if state is None:
         state = ChatState()
@@ -350,10 +366,12 @@ async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed:
     existing = state.members.get(user_id)
     prev_seconds = existing.total_seconds if existing else 0
     prev_formatted = format_total(prev_seconds)
-    new_seconds = prev_seconds + elapsed
+    new_seconds = prev_seconds + (end_ts - start_ts)
     new_formatted = format_total(new_seconds)
 
-    state.members[user_id] = MemberState(name=name, total_seconds=new_seconds)
+    state.members[user_id] = MemberState(
+        name=name, total_seconds=new_seconds, last_end_ts=end_ts
+    )
     save_states()
 
     if state.message_id is None:
