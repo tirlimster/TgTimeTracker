@@ -214,8 +214,6 @@ async def handle_added_to_group(event: ChatMemberUpdated) -> None:
         return
 
     state = ChatState()
-    if event.from_user and not event.from_user.is_bot:
-        state.members[event.from_user.id] = (event.from_user.full_name, 0)
 
     sent = await event.bot.send_message(
         event.chat.id,
@@ -352,6 +350,7 @@ async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed:
         state.message_id = sent.message_id
         chat_states[chat_id] = state
 
+    user_existed = user_id in state.members
     _, prev_seconds = state.members.get(user_id, (name, 0))
     prev_formatted = format_total(prev_seconds)
     new_seconds = prev_seconds + elapsed
@@ -360,7 +359,9 @@ async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed:
     state.members[user_id] = (name, new_seconds)
     save_states()
 
-    if state.message_id is None or new_formatted == prev_formatted:
+    if state.message_id is None:
+        return
+    if user_existed and new_formatted == prev_formatted:
         return
 
     await bot.edit_message_text(
