@@ -1,9 +1,11 @@
 import asyncio
+import json
 import logging
 import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -24,6 +26,8 @@ ABSENT_STATUSES = {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
 
 TRACKING_TITLE = "Time tracked"
 
+STATE_FILE = Path("data/chat_states.json")
+
 
 @dataclass
 class ChatState:
@@ -32,6 +36,37 @@ class ChatState:
 
 
 chat_states: dict[int, ChatState] = {}
+
+
+def save_states() -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        str(chat_id): {
+            "message_id": state.message_id,
+            "members": {
+                str(user_id): [name, seconds]
+                for user_id, (name, seconds) in state.members.items()
+            },
+        }
+        for chat_id, state in chat_states.items()
+    }
+    tmp = STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+    tmp.replace(STATE_FILE)
+
+
+def load_states() -> None:
+    if not STATE_FILE.exists():
+        return
+    raw = json.loads(STATE_FILE.read_text())
+    for chat_id_str, data in raw.items():
+        chat_states[int(chat_id_str)] = ChatState(
+            message_id=data["message_id"],
+            members={
+                int(uid): (entry[0], entry[1])
+                for uid, entry in data["members"].items()
+            },
+        )
 
 
 class StartTracking(CallbackData, prefix="tstart"):
@@ -109,6 +144,7 @@ async def handle_added_to_group(event: ChatMemberUpdated) -> None:
     )
     state.message_id = sent.message_id
     chat_states[event.chat.id] = state
+    save_states()
 
 
 @dp.callback_query(StartTracking.filter())
@@ -159,6 +195,7 @@ async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed:
     new_formatted = format_total(new_seconds)
 
     state.members[user_id] = (name, new_seconds)
+    save_states()
 
     if state.message_id is None or new_formatted == prev_formatted:
         return
@@ -173,6 +210,7 @@ async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed:
 
 async def main() -> None:
     load_dotenv()
+    load_states()
     token = os.environ["TG_TOKEN"]
     bot = Bot(token=token)
     await dp.start_polling(bot)
