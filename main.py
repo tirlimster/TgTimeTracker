@@ -78,6 +78,28 @@ class StopTracking(CallbackData, prefix="tstop"):
     start_ts: int
 
 
+class MenuAction(CallbackData, prefix="m"):
+    action: str
+    user_id: int
+    start_ts: int
+    end_ts: int
+
+
+class StepAction(CallbackData, prefix="s"):
+    target: str
+    delta: int
+    user_id: int
+    start_ts: int
+    end_ts: int
+
+
+class StepperSubmit(CallbackData, prefix="sd"):
+    target: str
+    user_id: int
+    start_ts: int
+    end_ts: int
+
+
 def format_total(seconds: int) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes = remainder // 60
@@ -98,6 +120,22 @@ def format_clock(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%H:%M:%S")
 
 
+def working_text(name: str, start_ts: int) -> str:
+    return f"User {name} is working since {format_clock(start_ts)}"
+
+
+def log_text(name: str, start_ts: int, end_ts: int) -> str:
+    return (
+        f"{name}: {format_clock(start_ts)} - {format_clock(end_ts)} "
+        f"({format_elapsed(end_ts - start_ts)})"
+    )
+
+
+def stepper_text(name: str, start_ts: int, end_ts: int, target: str) -> str:
+    header = "Editing start" if target == "s" else "Editing end"
+    return f"{header}\n{log_text(name, start_ts, end_ts)}"
+
+
 def start_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="Start tracking", callback_data=StartTracking().pack())]]
@@ -113,6 +151,48 @@ def stop_keyboard(user_id: int, start_ts: int) -> InlineKeyboardMarkup:
                     callback_data=StopTracking(user_id=user_id, start_ts=start_ts).pack(),
                 )
             ]
+        ]
+    )
+
+
+def edit_menu_kb(user_id: int, start_ts: int, end_ts: int) -> InlineKeyboardMarkup:
+    def btn(label: str, action: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(
+            text=label,
+            callback_data=MenuAction(
+                action=action, user_id=user_id, start_ts=start_ts, end_ts=end_ts
+            ).pack(),
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [btn("Edit start", "es"), btn("Edit end", "ee")],
+            [btn("Submit", "su"), btn("Cancel", "ca")],
+        ]
+    )
+
+
+def stepper_kb(target: str, user_id: int, start_ts: int, end_ts: int) -> InlineKeyboardMarkup:
+    def step(label: str, delta: int) -> InlineKeyboardButton:
+        return InlineKeyboardButton(
+            text=label,
+            callback_data=StepAction(
+                target=target, delta=delta, user_id=user_id, start_ts=start_ts, end_ts=end_ts
+            ).pack(),
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [step("-1h", -3600), step("-10m", -600), step("-1m", -60)],
+            [step("+1h", 3600), step("+10m", 600), step("+1m", 60)],
+            [
+                InlineKeyboardButton(
+                    text="Submit",
+                    callback_data=StepperSubmit(
+                        target=target, user_id=user_id, start_ts=start_ts, end_ts=end_ts
+                    ).pack(),
+                )
+            ],
         ]
     )
 
@@ -154,7 +234,7 @@ async def on_start_tracking(callback: CallbackQuery) -> None:
     user = callback.from_user
     start_ts = int(time.time())
     await callback.message.answer(
-        f"User {user.full_name} is working",
+        working_text(user.full_name, start_ts),
         reply_markup=stop_keyboard(user.id, start_ts),
     )
     await callback.answer()
@@ -169,25 +249,108 @@ async def on_stop_tracking(callback: CallbackQuery, callback_data: StopTracking)
         return
 
     end_ts = int(time.time())
-    elapsed = end_ts - callback_data.start_ts
     name = callback.from_user.full_name
 
-    start_formatted = format_clock(callback_data.start_ts)
-    end_formatted = format_clock(end_ts)
-    elapsed_formatted = format_elapsed(elapsed)
-    log_text = f"{name}: {start_formatted} - {end_formatted} ({elapsed_formatted})"
-
-    await callback.message.edit_text(log_text)
+    await callback.message.edit_text(
+        log_text(name, callback_data.start_ts, end_ts),
+        reply_markup=edit_menu_kb(callback.from_user.id, callback_data.start_ts, end_ts),
+    )
     await callback.answer()
 
-    await update_total(callback.bot, callback.message.chat.id, callback.from_user.id, name, elapsed)
+
+@dp.callback_query(MenuAction.filter())
+async def on_menu_action(callback: CallbackQuery, callback_data: MenuAction) -> None:
+    if callback.message is None:
+        return
+    if callback.from_user.id != callback_data.user_id:
+        await callback.answer("Only the owner can use these buttons.", show_alert=True)
+        return
+
+    name = callback.from_user.full_name
+    uid = callback.from_user.id
+    s, e = callback_data.start_ts, callback_data.end_ts
+    chat_id = callback.message.chat.id
+    msg_id = callback.message.message_id
+
+    if callback_data.action == "es":
+        await callback.message.edit_text(
+            stepper_text(name, s, e, "s"),
+            reply_markup=stepper_kb("s", uid, s, e),
+        )
+    elif callback_data.action == "ee":
+        await callback.message.edit_text(
+            stepper_text(name, s, e, "e"),
+            reply_markup=stepper_kb("e", uid, s, e),
+        )
+    elif callback_data.action == "su":
+        await callback.message.edit_text(log_text(name, s, e))
+        await update_total(callback.bot, chat_id, uid, name, e - s)
+    elif callback_data.action == "ca":
+        await callback.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+
+    await callback.answer()
+
+
+@dp.callback_query(StepAction.filter())
+async def on_step(callback: CallbackQuery, callback_data: StepAction) -> None:
+    if callback.message is None:
+        return
+    if callback.from_user.id != callback_data.user_id:
+        await callback.answer("Only the owner can use these buttons.", show_alert=True)
+        return
+
+    s, e = callback_data.start_ts, callback_data.end_ts
+    now = int(time.time())
+    target = callback_data.target
+
+    if target == "s":
+        new_s = s + callback_data.delta
+        if new_s >= e or new_s > now:
+            await callback.answer("Out of bounds.", show_alert=True)
+            return
+        s = new_s
+    else:
+        new_e = e + callback_data.delta
+        if new_e <= s or new_e > now:
+            await callback.answer("Out of bounds.", show_alert=True)
+            return
+        e = new_e
+
+    await callback.message.edit_text(
+        stepper_text(callback.from_user.full_name, s, e, target),
+        reply_markup=stepper_kb(target, callback.from_user.id, s, e),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(StepperSubmit.filter())
+async def on_stepper_submit(callback: CallbackQuery, callback_data: StepperSubmit) -> None:
+    if callback.message is None:
+        return
+    if callback.from_user.id != callback_data.user_id:
+        await callback.answer("Only the owner can use these buttons.", show_alert=True)
+        return
+
+    name = callback.from_user.full_name
+    s, e = callback_data.start_ts, callback_data.end_ts
+    await callback.message.edit_text(
+        log_text(name, s, e),
+        reply_markup=edit_menu_kb(callback.from_user.id, s, e),
+    )
+    await callback.answer()
 
 
 async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed: int) -> None:
     state = chat_states.get(chat_id)
     if state is None:
-        logging.warning(f"No state for chat {chat_id}")
-        return
+        state = ChatState()
+        sent = await bot.send_message(
+            chat_id,
+            render_tracking_message(state),
+            reply_markup=start_keyboard(),
+        )
+        state.message_id = sent.message_id
+        chat_states[chat_id] = state
 
     _, prev_seconds = state.members.get(user_id, (name, 0))
     prev_formatted = format_total(prev_seconds)
