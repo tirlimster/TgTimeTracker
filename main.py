@@ -5,8 +5,7 @@ from dataclasses import dataclass, field
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ChatMemberStatus, ChatType
-from aiogram.filters import CommandStart
-from aiogram.types import ChatMemberUpdated, Message
+from aiogram.types import ChatMemberUpdated
 from dotenv import load_dotenv
 
 dp = Dispatcher()
@@ -38,11 +37,6 @@ def render_tracking_message(state: ChatState) -> str:
     for name, seconds in state.members.values():
         lines.append(f"{name}: {format_duration(seconds)}")
     return "\n".join(lines)
-
-
-@dp.message(CommandStart())
-async def handle_start(message: Message) -> None:
-    await message.answer(f"Hello, {message.from_user.full_name}!")
 
 
 @dp.my_chat_member()
