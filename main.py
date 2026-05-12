@@ -30,12 +30,19 @@ STATE_FILE = Path("data/chat_states.json")
 
 
 @dataclass
+class MemberState:
+    name: str
+    total_seconds: int
+
+
+@dataclass
 class ChatState:
     message_id: int | None = None
-    members: dict[int, tuple[str, int]] = field(default_factory=dict)
+    members: dict[int, MemberState] = field(default_factory=dict)
 
 
 chat_states: dict[int, ChatState] = {}
+active_sessions: dict[int, set[int]] = {}
 
 
 def save_states() -> None:
@@ -44,8 +51,8 @@ def save_states() -> None:
         str(chat_id): {
             "message_id": state.message_id,
             "members": {
-                str(user_id): [name, seconds]
-                for user_id, (name, seconds) in state.members.items()
+                str(user_id): {"name": member.name, "total_seconds": member.total_seconds}
+                for user_id, member in state.members.items()
             },
         }
         for chat_id, state in chat_states.items()
@@ -60,12 +67,13 @@ def load_states() -> None:
         return
     raw = json.loads(STATE_FILE.read_text())
     for chat_id_str, data in raw.items():
+        members: dict[int, MemberState] = {
+            int(uid): MemberState(name=entry["name"], total_seconds=entry["total_seconds"])
+            for uid, entry in data["members"].items()
+        }
         chat_states[int(chat_id_str)] = ChatState(
             message_id=data["message_id"],
-            members={
-                int(uid): (entry[0], entry[1])
-                for uid, entry in data["members"].items()
-            },
+            members=members,
         )
 
 
@@ -199,8 +207,8 @@ def stepper_kb(target: str, user_id: int, start_ts: int, end_ts: int) -> InlineK
 
 def render_tracking_message(state: ChatState) -> str:
     lines = [f"{TRACKING_TITLE}:"]
-    for name, seconds in state.members.values():
-        lines.append(f"{name}: {format_total(seconds)}")
+    for member in state.members.values():
+        lines.append(f"{member.name}: {format_total(member.total_seconds)}")
     return "\n".join(lines)
 
 
@@ -230,7 +238,14 @@ async def on_start_tracking(callback: CallbackQuery) -> None:
     if callback.message is None:
         return
     user = callback.from_user
+    chat_id = callback.message.chat.id
+    if user.id in active_sessions.get(chat_id, set()):
+        await callback.answer(
+            "You already have an ongoing tracking. End it first.", show_alert=True
+        )
+        return
     start_ts = int(time.time())
+    active_sessions.setdefault(chat_id, set()).add(user.id)
     await callback.message.answer(
         working_text(user.full_name, start_ts),
         reply_markup=stop_keyboard(user.id, start_ts),
@@ -283,8 +298,10 @@ async def on_menu_action(callback: CallbackQuery, callback_data: MenuAction) -> 
     elif callback_data.action == "su":
         await callback.message.edit_text(log_text(name, s, e))
         await update_total(callback.bot, chat_id, uid, name, e - s)
+        active_sessions.get(chat_id, set()).discard(uid)
     elif callback_data.action == "ca":
         await callback.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        active_sessions.get(chat_id, set()).discard(uid)
 
     await callback.answer()
 
@@ -350,18 +367,18 @@ async def update_total(bot: Bot, chat_id: int, user_id: int, name: str, elapsed:
         state.message_id = sent.message_id
         chat_states[chat_id] = state
 
-    user_existed = user_id in state.members
-    _, prev_seconds = state.members.get(user_id, (name, 0))
+    existing = state.members.get(user_id)
+    prev_seconds = existing.total_seconds if existing else 0
     prev_formatted = format_total(prev_seconds)
     new_seconds = prev_seconds + elapsed
     new_formatted = format_total(new_seconds)
 
-    state.members[user_id] = (name, new_seconds)
+    state.members[user_id] = MemberState(name=name, total_seconds=new_seconds)
     save_states()
 
     if state.message_id is None:
         return
-    if user_existed and new_formatted == prev_formatted:
+    if existing is not None and new_formatted == prev_formatted:
         return
 
     await bot.edit_message_text(
